@@ -49,8 +49,9 @@ impl Server {
 
     fn start(self) {
         thread::spawn(move || -> Result<(), mpsc::RecvError> {
-            let string = self.rx.recv()?;
-            println!("{}", string);
+            for string in self.rx.iter() {
+                println!("{}", string);
+            }
             Ok(())
         });
     }
