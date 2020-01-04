@@ -1,3 +1,4 @@
+use std::convert::From;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -9,12 +10,15 @@ use std::sync::mpsc;
 use std::thread;
 
 #[derive(Debug)]
-struct Message {
-    msg: String,
+struct Message<T> {
+    msg: T,
     from: net::SocketAddr,
 }
 
-impl fmt::Display for Message {
+impl<T> fmt::Display for Message<T>
+where
+    T: fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} {}", self.from, self.msg)
     }
@@ -33,16 +37,18 @@ where
     }
 }
 
-impl Client<Message> {
+impl<T> Client<Message<T>>
+where
+    T: 'static + Send + Sync + From<String>,
+{
     fn handle(self: Self, stream: net::TcpStream) -> Result<(), Box<Error>> {
         let (peer, local) = (stream.peer_addr()?, stream.local_addr()?);
         let tx = self.tx.clone();
         println!("{} -> {}", peer, local);
         thread::spawn(move || -> Result<(), io::Error> {
             for line in BufReader::new(stream).lines() {
-                // tx.send(std::convert::From::from(line?)).or_else(|e| {
                 tx.send(Message {
-                    msg: line?,
+                    msg: From::from(line?),
                     from: peer,
                 })
                 .or_else(|e| {
@@ -81,8 +87,7 @@ where
 
 fn main() -> Result<(), Box<Error>> {
     println!("chat server");
-    // let (tx, rx) = mpsc::sync_channel::<String>(1000);
-    let (tx, rx) = mpsc::sync_channel::<Message>(1000);
+    let (tx, rx) = mpsc::sync_channel::<Message<String>>(1000);
     let _ = Server::new(rx).start();
     let listener = net::TcpListener::bind("localhost:1234")?;
     for stream in listener.incoming() {
