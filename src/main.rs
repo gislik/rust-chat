@@ -3,9 +3,9 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 use std::io::prelude::*;
-use std::io::BufReader;
 use std::net;
 use std::result::Result;
+use std::sync;
 use std::sync::mpsc;
 use std::thread;
 
@@ -24,29 +24,66 @@ where
     }
 }
 
-struct Client<T> {
-    tx: mpsc::SyncSender<T>,
+struct Server<T> {
+    txs: sync::Arc<sync::Mutex<Vec<mpsc::SyncSender<T>>>>,
 }
 
-impl<T> Client<T>
+impl<T> Server<T>
 where
-    T: 'static + fmt::Display + Send + Sync,
+    T: 'static + fmt::Display + Send,
 {
-    fn new(tx: mpsc::SyncSender<T>) -> Self {
-        Client { tx }
+    fn new() -> Self {
+        Server {
+            txs: sync::Arc::new(sync::Mutex::new(vec![])),
+        }
+    }
+
+    fn add(&mut self, tx: mpsc::SyncSender<T>) -> Result<(), Box<dyn Error>> {
+        let txs = self.txs.clone();
+        let mut txs = txs.lock().unwrap(); // TODO
+        txs.push(tx);
+        Ok(())
     }
 }
 
-impl<T> Client<Message<T>>
+impl<T> Server<Message<T>>
 where
-    T: 'static + Send + Sync + From<String>,
+    T: 'static + fmt::Display + Clone + Send,
 {
-    fn handle(self: Self, stream: net::TcpStream) -> Result<(), Box<Error>> {
+    fn start(&self, rx: mpsc::Receiver<Message<T>>) {
+        let txs = self.txs.clone();
+        thread::spawn(move || -> Result<(), mpsc::SendError<Message<T>>> {
+            for msg in rx.iter() {
+                println!("{}", msg);
+                let txs = txs.lock().unwrap(); // TODO: error handling
+                for tx in txs.iter() {
+                    tx.send(Message {
+                        msg: msg.msg.clone(),
+                        from: msg.from,
+                    })?;
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
+impl<T> Server<Message<T>>
+where
+    T: 'static + Send + Sync + From<String> + fmt::Display,
+{
+    fn handle(
+        self: &Self,
+        tx: mpsc::SyncSender<Message<T>>,
+        rx: mpsc::Receiver<Message<T>>,
+        stream: net::TcpStream,
+    ) -> Result<(), Box<Error>> {
         let (peer, local) = (stream.peer_addr()?, stream.local_addr()?);
-        let tx = self.tx.clone();
         println!("{} -> {}", peer, local);
+        let mut buf_writer = io::BufWriter::new(stream.try_clone()?);
+        let buf_reader = io::BufReader::new(stream);
         thread::spawn(move || -> Result<(), io::Error> {
-            for line in BufReader::new(stream).lines() {
+            for line in buf_reader.lines() {
                 tx.send(Message {
                     msg: From::from(line?),
                     from: peer,
@@ -59,40 +96,31 @@ where
             println!("{} ~> closed", peer);
             Ok(())
         });
-        Ok(())
-    }
-}
-
-struct Server<T> {
-    rx: mpsc::Receiver<T>,
-}
-
-impl<T> Server<T>
-where
-    T: 'static + fmt::Display + Send,
-{
-    fn new(rx: mpsc::Receiver<T>) -> Self {
-        Server { rx }
-    }
-
-    fn start(self) {
-        thread::spawn(move || -> Result<(), mpsc::RecvError> {
-            for string in self.rx.iter() {
-                println!("{}", string);
+        thread::spawn(move || -> Result<(), io::Error> {
+            for msg in rx.iter() {
+                write!(buf_writer, "{}\n", msg)?;
+                buf_writer.flush()?;
             }
             Ok(())
         });
+        Ok(())
     }
 }
 
 fn main() -> Result<(), Box<Error>> {
     println!("chat server");
-    let (tx, rx) = mpsc::sync_channel::<Message<String>>(1000);
-    let _ = Server::new(rx).start();
+    let (server_tx, server_rx) = mpsc::sync_channel::<Message<String>>(1000);
+    let mut server = Server::new();
+    server.start(server_rx);
     let listener = net::TcpListener::bind("localhost:1234")?;
     for stream in listener.incoming() {
         match stream {
-            Ok(stream) => Client::new(tx.clone()).handle(stream),
+            Ok(stream) => {
+                let (client_tx, client_rx) = mpsc::sync_channel(1000);
+                let server = &mut server;
+                server.add(client_tx)?;
+                server.handle(server_tx.clone(), client_rx, stream)
+            }
             Err(e) => Err(Box::from(e)),
         }?;
     }
