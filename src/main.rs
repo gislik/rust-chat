@@ -25,12 +25,12 @@ where
 }
 
 struct Server<T> {
-    txs: sync::Arc<sync::Mutex<Vec<mpsc::SyncSender<T>>>>,
+    txs: sync::Arc<sync::Mutex<Vec<mpsc::SyncSender<Message<T>>>>>,
 }
 
 impl<T> Server<T>
 where
-    T: 'static + fmt::Display + Send,
+    T: 'static + fmt::Display + From<String> + Clone + Send + Sync,
 {
     fn new() -> Self {
         Server {
@@ -38,40 +38,33 @@ where
         }
     }
 
-    fn add(&mut self, tx: mpsc::SyncSender<T>) -> Result<(), Box<dyn Error>> {
+    fn add(&mut self, tx: mpsc::SyncSender<Message<T>>) -> Result<(), Box<dyn Error>> {
         let txs = self.txs.clone();
         let mut txs = txs.lock().unwrap(); // TODO
         txs.push(tx);
         Ok(())
     }
-}
 
-impl<T> Server<Message<T>>
-where
-    T: 'static + fmt::Display + Clone + Send,
-{
     fn start(&self, rx: mpsc::Receiver<Message<T>>) {
         let txs = self.txs.clone();
         thread::spawn(move || -> Result<(), mpsc::SendError<Message<T>>> {
             for msg in rx.iter() {
                 println!("{}", msg);
-                let txs = txs.lock().unwrap(); // TODO: error handling
-                for tx in txs.iter() {
-                    tx.send(Message {
+                let mut txs = txs.lock().unwrap(); // TODO
+                txs.retain(|tx| {
+                    match tx.send(Message {
                         msg: msg.msg.clone(),
                         from: msg.from,
-                    })?;
-                }
+                    }) {
+                        Err(_) => false,
+                        _ => true,
+                    }
+                });
             }
             Ok(())
         });
     }
-}
 
-impl<T> Server<Message<T>>
-where
-    T: 'static + Send + Sync + From<String> + fmt::Display,
-{
     fn handle(
         self: &Self,
         tx: mpsc::SyncSender<Message<T>>,
