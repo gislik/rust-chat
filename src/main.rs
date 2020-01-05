@@ -48,10 +48,15 @@ impl Server {
                 let buf = buf.as_bytes();
                 let mut streams = streams.lock().unwrap(); // TODO
                 streams.retain(|stream| {
-                    let mut stream = io::BufWriter::new(stream);
-                    match stream.write_all(buf).and_then(|_| stream.flush()) {
-                        Err(_) => false,
-                        _ => true,
+                    let peer = stream.peer_addr().unwrap(); // TODO
+                    if msg.from == peer {
+                        true
+                    } else {
+                        let mut stream = io::BufWriter::new(stream);
+                        match stream.write_all(buf).and_then(|_| stream.flush()) {
+                            Err(_) => false,
+                            _ => true,
+                        }
                     }
                 });
             }
@@ -87,7 +92,7 @@ impl Server {
         });
         let streams = self.streams.clone();
         let mut streams = streams.lock().unwrap(); // TODO
-        streams.push(stream); // TODO: push Write
+        streams.push(stream);
         Ok(())
     }
 }
