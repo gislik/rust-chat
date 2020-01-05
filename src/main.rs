@@ -24,57 +24,51 @@ where
     }
 }
 
-struct Server<T> {
-    txs: sync::Arc<sync::Mutex<Vec<mpsc::SyncSender<Message<T>>>>>,
+struct Server {
+    streams: sync::Arc<sync::Mutex<Vec<net::TcpStream>>>,
 }
 
-impl<T> Server<T>
-where
-    T: 'static + fmt::Display + From<String> + Clone + Send + Sync,
-{
+impl Server {
     fn new() -> Self {
         Server {
-            txs: sync::Arc::new(sync::Mutex::new(vec![])),
+            streams: sync::Arc::new(sync::Mutex::new(vec![])),
         }
     }
 
-    fn add(&mut self, tx: mpsc::SyncSender<Message<T>>) -> Result<(), Box<dyn Error>> {
-        let txs = self.txs.clone();
-        let mut txs = txs.lock().unwrap(); // TODO
-        txs.push(tx);
-        Ok(())
-    }
-
-    fn start(&self, rx: mpsc::Receiver<Message<T>>) {
-        let txs = self.txs.clone();
+    fn start<T>(&self, rx: mpsc::Receiver<Message<T>>)
+    where
+        T: 'static + Sync + Send,
+        T: fmt::Display,
+    {
+        let streams = self.streams.clone();
         thread::spawn(move || -> Result<(), mpsc::SendError<Message<T>>> {
             for msg in rx.iter() {
                 println!("{}", msg);
-                let mut txs = txs.lock().unwrap(); // TODO
-                txs.retain(|tx| {
-                    match tx.send(Message {
-                        msg: msg.msg.clone(),
-                        from: msg.from,
-                    }) {
-                        Err(_) => false,
-                        _ => true,
-                    }
+                let buf = format!("{}\n", msg);
+                let buf = buf.as_bytes();
+                let mut streams = streams.lock().unwrap(); // TODO
+                streams.retain(|mut stream| match stream.write_all(buf) {
+                    Err(_) => false,
+                    _ => true,
                 });
             }
             Ok(())
         });
     }
 
-    fn handle(
+    fn handle<T>(
         self: &Self,
         tx: mpsc::SyncSender<Message<T>>,
-        rx: mpsc::Receiver<Message<T>>,
         stream: net::TcpStream,
-    ) -> Result<(), Box<Error>> {
+    ) -> Result<(), Box<Error>>
+    where
+        T: fmt::Display + From<String>,
+        T: 'static + Send + Sync,
+    {
         let (peer, local) = (stream.peer_addr()?, stream.local_addr()?);
         println!("{} -> {}", peer, local);
-        let mut buf_writer = io::BufWriter::new(stream.try_clone()?);
-        let buf_reader = io::BufReader::new(stream);
+        // let buf_writer = io::BufWriter::new(stream.try_clone()?);
+        let buf_reader = io::BufReader::new(stream.try_clone()?);
         thread::spawn(move || -> Result<(), io::Error> {
             for line in buf_reader.lines() {
                 tx.send(Message {
@@ -89,13 +83,9 @@ where
             println!("{} ~> closed", peer);
             Ok(())
         });
-        thread::spawn(move || -> Result<(), io::Error> {
-            for msg in rx.iter() {
-                write!(buf_writer, "{}\n", msg)?;
-                buf_writer.flush()?;
-            }
-            Ok(())
-        });
+        let streams = self.streams.clone();
+        let mut streams = streams.lock().unwrap(); // TODO
+        streams.push(stream); // TODO: push Write
         Ok(())
     }
 }
@@ -109,10 +99,8 @@ fn main() -> Result<(), Box<Error>> {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                let (client_tx, client_rx) = mpsc::sync_channel(1000);
                 let server = &mut server;
-                server.add(client_tx)?;
-                server.handle(server_tx.clone(), client_rx, stream)
+                server.handle(server_tx.clone(), stream)
             }
             Err(e) => Err(Box::from(e)),
         }?;
