@@ -45,22 +45,9 @@ impl Server {
             move || -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
                 for msg in rx.iter() {
                     println!("{}", msg);
-                    let buf = format!("{}\n", msg);
-                    let buf = buf.as_bytes();
                     match streams.lock() {
                         Ok(mut streams) => {
-                            streams.retain(|stream| {
-                                let peer = stream.peer_addr().unwrap(); // TODO
-                                if msg.from == peer {
-                                    true
-                                } else {
-                                    let mut stream = io::BufWriter::new(stream);
-                                    match stream.write_all(buf).and_then(|_| stream.flush()) {
-                                        Err(_) => false,
-                                        _ => true,
-                                    }
-                                }
-                            });
+                            streams.retain(|stream| Server::send_peers(stream, &msg))
                         }
                         Err(e) => println!("{}", e),
                     }
@@ -100,6 +87,24 @@ impl Server {
         let mut streams = streams.lock().unwrap(); // TODO
         streams.push(stream);
         Ok(())
+    }
+
+    fn send_peers<T>(stream: &net::TcpStream, msg: &Message<T>) -> bool
+    where
+        T: fmt::Display,
+    {
+        let peer = stream.peer_addr().unwrap(); // TODO
+        if msg.from == peer {
+            true
+        } else {
+            let buf = format!("{}\n", msg);
+            let buf = buf.as_bytes();
+            let mut stream = io::BufWriter::new(stream);
+            match stream.write_all(buf).and_then(|_| stream.flush()) {
+                Err(_) => false,
+                _ => true,
+            }
+        }
     }
 }
 
