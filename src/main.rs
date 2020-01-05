@@ -41,27 +41,33 @@ impl Server {
         T: fmt::Display,
     {
         let streams = self.streams.clone();
-        thread::spawn(move || -> Result<(), mpsc::SendError<Message<T>>> {
-            for msg in rx.iter() {
-                println!("{}", msg);
-                let buf = format!("{}\n", msg);
-                let buf = buf.as_bytes();
-                let mut streams = streams.lock().unwrap(); // TODO
-                streams.retain(|stream| {
-                    let peer = stream.peer_addr().unwrap(); // TODO
-                    if msg.from == peer {
-                        true
-                    } else {
-                        let mut stream = io::BufWriter::new(stream);
-                        match stream.write_all(buf).and_then(|_| stream.flush()) {
-                            Err(_) => false,
-                            _ => true,
+        thread::spawn(
+            move || -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+                for msg in rx.iter() {
+                    println!("{}", msg);
+                    let buf = format!("{}\n", msg);
+                    let buf = buf.as_bytes();
+                    match streams.lock() {
+                        Ok(mut streams) => {
+                            streams.retain(|stream| {
+                                let peer = stream.peer_addr().unwrap(); // TODO
+                                if msg.from == peer {
+                                    true
+                                } else {
+                                    let mut stream = io::BufWriter::new(stream);
+                                    match stream.write_all(buf).and_then(|_| stream.flush()) {
+                                        Err(_) => false,
+                                        _ => true,
+                                    }
+                                }
+                            });
                         }
+                        Err(e) => println!("{}", e),
                     }
-                });
-            }
-            Ok(())
-        });
+                }
+                Ok(())
+            },
+        );
     }
 
     fn handle<T>(
