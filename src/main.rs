@@ -47,7 +47,7 @@ impl Server {
                     println!("{}", msg);
                     match streams.lock() {
                         Ok(mut streams) => {
-                            streams.retain(|stream| Server::send_peers(stream, &msg))
+                            streams.retain(|stream| Server::send_peers(stream, &msg).is_ok())
                         }
                         Err(e) => println!("{}", e),
                     }
@@ -89,21 +89,20 @@ impl Server {
         Ok(())
     }
 
-    fn send_peers<T>(stream: &net::TcpStream, msg: &Message<T>) -> bool
+    fn send_peers<T>(mut stream: &net::TcpStream, msg: &Message<T>) -> Result<(), impl Error>
     where
         T: fmt::Display,
     {
-        let peer = stream.peer_addr().unwrap(); // TODO
+        let peer = stream.peer_addr()?;
         if msg.from == peer {
-            true
+            Ok(())
         } else {
             let buf = format!("{}\n", msg);
             let buf = buf.as_bytes();
-            let mut stream = io::BufWriter::new(stream);
-            match stream.write_all(buf).and_then(|_| stream.flush()) {
-                Err(_) => false,
-                _ => true,
-            }
+            io::BufWriter::new(stream)
+                .write_all(buf)
+                .and(stream.flush())
+                .and(Ok(()))
         }
     }
 }
