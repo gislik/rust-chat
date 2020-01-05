@@ -5,8 +5,8 @@ use std::io;
 use std::io::prelude::*;
 use std::net;
 use std::result::Result;
-use std::sync;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 #[derive(Debug)]
@@ -25,13 +25,13 @@ where
 }
 
 struct Server {
-    streams: sync::Arc<sync::Mutex<Vec<net::TcpStream>>>,
+    streams: Arc<Mutex<Vec<net::TcpStream>>>,
 }
 
 impl Server {
     fn new() -> Self {
         Server {
-            streams: sync::Arc::new(sync::Mutex::new(vec![])),
+            streams: Arc::new(Mutex::new(vec![])),
         }
     }
 
@@ -47,9 +47,12 @@ impl Server {
                 let buf = format!("{}\n", msg);
                 let buf = buf.as_bytes();
                 let mut streams = streams.lock().unwrap(); // TODO
-                streams.retain(|mut stream| match stream.write_all(buf) {
-                    Err(_) => false,
-                    _ => true,
+                streams.retain(|stream| {
+                    let mut stream = io::BufWriter::new(stream);
+                    match stream.write_all(buf).and_then(|_| stream.flush()) {
+                        Err(_) => false,
+                        _ => true,
+                    }
                 });
             }
             Ok(())
@@ -67,7 +70,6 @@ impl Server {
     {
         let (peer, local) = (stream.peer_addr()?, stream.local_addr()?);
         println!("{} -> {}", peer, local);
-        // let buf_writer = io::BufWriter::new(stream.try_clone()?);
         let buf_reader = io::BufReader::new(stream.try_clone()?);
         thread::spawn(move || -> Result<(), io::Error> {
             for line in buf_reader.lines() {
