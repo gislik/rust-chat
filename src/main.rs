@@ -61,7 +61,7 @@ impl Server {
         self: &Self,
         tx: mpsc::SyncSender<Message<T>>,
         stream: net::TcpStream,
-    ) -> Result<(), Box<Error>>
+    ) -> Result<(), Box<dyn Error>>
     where
         T: fmt::Display + From<String>,
         T: 'static + Send + Sync,
@@ -107,7 +107,7 @@ impl Server {
     }
 }
 
-fn main() -> Result<(), Box<Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     println!("chat server");
     let (server_tx, server_rx) = mpsc::sync_channel::<Message<String>>(1000);
     let mut server = Server::new();
